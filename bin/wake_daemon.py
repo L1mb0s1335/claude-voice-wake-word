@@ -44,12 +44,24 @@ def normalize(text: str) -> str:
     return " ".join(text.strip().lower().split())
 
 
-def trigger():
+def spawn_trigger():
+    """Launch trigger_voice_mode.sh WITHOUT blocking the audio loop.
+
+    A cold start can legitimately take 15-20s (window-appear poll + settle).
+    Blocking here on subprocess.run() starved `parecord`'s output pipe of a
+    reader for that whole time, so a backlog of stale audio built up and got
+    burst-processed the moment the loop resumed - which could spuriously
+    re-trigger and pile up multiple overlapping claude-desktop launches
+    (observed live: 4 simultaneous claude-desktop process trees, one of which
+    then crashed/core-dumped from the resulting memory pressure). Firing it
+    as a detached Popen keeps the audio loop live the whole time.
+    """
     print("[wake] phrase detected -> activating voice mode", flush=True)
     try:
-        subprocess.run(["/bin/bash", str(TRIGGER_SCRIPT)], check=False, timeout=15)
+        return subprocess.Popen(["/bin/bash", str(TRIGGER_SCRIPT)])
     except Exception as exc:  # noqa: BLE001 - log and keep listening regardless
-        print(f"[wake] trigger script failed: {exc}", flush=True)
+        print(f"[wake] trigger script failed to start: {exc}", flush=True)
+        return None
 
 
 def main():
@@ -72,6 +84,7 @@ def main():
 
     print("[wake] listening for \"привет, клод\"...", flush=True)
     last_trigger = 0.0
+    trigger_proc = None
 
     try:
         while True:
@@ -100,10 +113,14 @@ def main():
 
             if text and text in WAKE_PHRASES:
                 now = time.time()
-                if now - last_trigger > COOLDOWN_SECONDS:
+                trigger_busy = trigger_proc is not None and trigger_proc.poll() is None
+                if trigger_busy:
+                    if ended:
+                        print(f"[wake] heard \"{text}\" but a trigger is still running, skipping", flush=True)
+                elif now - last_trigger > COOLDOWN_SECONDS:
                     last_trigger = now
                     recognizer.Reset()  # don't also fire on the eventual Final for this utterance
-                    trigger()
+                    trigger_proc = spawn_trigger()
                 elif ended:
                     print(f"[wake] heard \"{text}\" but still in cooldown", flush=True)
     except KeyboardInterrupt:
