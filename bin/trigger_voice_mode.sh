@@ -9,6 +9,9 @@ set -uo pipefail
 
 CLASS="com.anthropic.Claude"
 
+# Save the currently active window to return to it later
+PREV_WID=$(kdotool getactivewindow 2>/dev/null)
+
 if pgrep -x claude-desktop >/dev/null 2>&1; then
     WARM=1
 else
@@ -29,26 +32,42 @@ done
 
 if [ -n "$WID" ]; then
     kdotool windowactivate "$WID" 2>/dev/null
-fi
 
-# Settle time for the composer to finish rendering/auto-focus after the
-# claude:// navigation. NOTE: on a warm start the OS window already exists,
-# so the poll loop above exits almost instantly - it does NOT mean the new
-# chat's composer has rendered yet. A real-world test with only 0.4s here
-# needed the wake phrase said twice (first Tab/Enter landed before the
-# composer was ready). 1.3s matches the originally-tested timing with margin.
-if [ "$WARM" -eq 1 ]; then
-    sleep 1.3
-else
-    # Confirmed too short at 2.5s on a real cold start (chat opened but
-    # Voice Mode never activated - Tab/Enter fired before the composer was
-    # interactive). Electron boot + auth/session restore takes a while even
-    # after the OS window itself exists, so give it a lot more margin here.
-    sleep 6
-fi
+    # Poll until the window actually has focus instead of fixed sleep.
+    # This is more reliable than guessing a fixed timeout, especially when
+    # switching between workspaces.
+    for i in $(seq 1 50); do
+        ACTIVE=$(kdotool getactivewindow 2>/dev/null)
+        if [ "$ACTIVE" = "$WID" ]; then
+            break
+        fi
+        sleep 0.1
+    done
 
-# From the freshly-opened chat composer, the textarea is auto-focused.
-# 4x Tab reaches the "Use voice mode" button; Enter activates it.
-ydotool key 15:1 15:0 15:1 15:0 15:1 15:0 15:1 15:0
-sleep 0.2
-ydotool key 28:1 28:0
+    # Extra settle time for the composer to finish rendering after the
+    # claude:// navigation and window focus.
+    if [ "$WARM" -eq 1 ]; then
+        sleep 0.5
+    else
+        sleep 2
+    fi
+
+    # Clear any open menus/focus state before sending keys
+    ydotool key 1:1 1:0
+    sleep 0.3
+
+    # Extra buffer to ensure UI is ready
+    sleep 0.5
+
+    # From the freshly-opened chat composer, the textarea is auto-focused.
+    # 4x Tab reaches the "Use voice mode" button; Enter activates it.
+    ydotool key 15:1 15:0 15:1 15:0 15:1 15:0 15:1 15:0
+    sleep 0.2
+    ydotool key 28:1 28:0
+
+    # Switch back to the previously active window
+    if [ -n "$PREV_WID" ]; then
+        sleep 0.5
+        kdotool windowactivate "$PREV_WID" 2>/dev/null || true
+    fi
+fi
