@@ -31,12 +31,20 @@ if [ -n "$WID" ]; then
     kdotool windowactivate "$WID" 2>/dev/null
 fi
 
-# Extra settle time for the composer to finish rendering/auto-focus on a cold
-# start (app init / auth check), proven unnecessary when already running.
+# Settle time for the composer to finish rendering/auto-focus after the
+# claude:// navigation. NOTE: on a warm start the OS window already exists,
+# so the poll loop above exits almost instantly - it does NOT mean the new
+# chat's composer has rendered yet. A real-world test with only 0.4s here
+# needed the wake phrase said twice (first Tab/Enter landed before the
+# composer was ready). 1.3s matches the originally-tested timing with margin.
 if [ "$WARM" -eq 1 ]; then
-    sleep 0.4
+    sleep 1.3
 else
-    sleep 2.5
+    # Confirmed too short at 2.5s on a real cold start (chat opened but
+    # Voice Mode never activated - Tab/Enter fired before the composer was
+    # interactive). Electron boot + auth/session restore takes a while even
+    # after the OS window itself exists, so give it a lot more margin here.
+    sleep 6
 fi
 
 # From the freshly-opened chat composer, the textarea is auto-focused.
