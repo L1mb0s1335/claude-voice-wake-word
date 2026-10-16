@@ -18,7 +18,7 @@ MODEL_PATH = PROJECT_DIR / "models" / "vosk-model-small-ru-0.22"
 TRIGGER_SCRIPT = PROJECT_DIR / "bin" / "trigger_voice_mode.sh"
 
 SAMPLE_RATE = 16000
-CHUNK_BYTES = 8000  # 0.25s of 16-bit mono @ 16kHz
+CHUNK_BYTES = 3200  # 0.1s of 16-bit mono @ 16kHz - finer-grained partial checks
 
 # Grammar-constrained recognition: the decoder is only allowed to output one of
 # these phrases (or [unk] for anything else). This keeps false positives low and
@@ -85,16 +85,27 @@ def main():
                     stdout=subprocess.PIPE,
                 )
                 continue
-            if recognizer.AcceptWaveform(data):
+            # Act on the PARTIAL hypothesis instead of waiting for Vosk to decide
+            # the utterance has ended (which needs a trailing silence gap) - this
+            # is the single biggest win for perceived latency: we fire the instant
+            # the grammar-constrained decoder is confident it heard the phrase,
+            # not ~0.5-1s later once it also detects you've stopped talking.
+            ended = recognizer.AcceptWaveform(data)
+            if ended:
                 result = json.loads(recognizer.Result())
                 text = normalize(result.get("text", ""))
-                if text and text in WAKE_PHRASES:
-                    now = time.time()
-                    if now - last_trigger > COOLDOWN_SECONDS:
-                        last_trigger = now
-                        trigger()
-                    else:
-                        print(f"[wake] heard \"{text}\" but still in cooldown", flush=True)
+            else:
+                partial = json.loads(recognizer.PartialResult())
+                text = normalize(partial.get("partial", ""))
+
+            if text and text in WAKE_PHRASES:
+                now = time.time()
+                if now - last_trigger > COOLDOWN_SECONDS:
+                    last_trigger = now
+                    recognizer.Reset()  # don't also fire on the eventual Final for this utterance
+                    trigger()
+                elif ended:
+                    print(f"[wake] heard \"{text}\" but still in cooldown", flush=True)
     except KeyboardInterrupt:
         pass
     finally:
