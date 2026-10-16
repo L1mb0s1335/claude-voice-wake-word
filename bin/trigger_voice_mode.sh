@@ -47,6 +47,21 @@ else
     sleep 6
 fi
 
+# claude-desktop is a SINGLE shared window that can show other conversations
+# (e.g. a Claude Code session with activity in it). If something switched the
+# window's visible view back to one of those in between, the Tab/Enter below
+# would land on THAT view's controls instead - this actually happened once
+# live, landing on a permission-mode selector instead of the voice button.
+# Re-issuing the deep link right before the keys shrinks that race window by
+# forcing the fresh-chat composer back to front at the last possible moment
+# (it's idempotent - always shows/creates a new chat).
+claude-desktop "claude://claude.ai/new?surface=chat&source=desktop_action" >/dev/null 2>&1 &
+disown
+if [ -n "$WID" ]; then
+    kdotool windowactivate "$WID" 2>/dev/null
+fi
+sleep 0.6
+
 # From the freshly-opened chat composer, the textarea is auto-focused.
 # 4x Tab reaches the "Use voice mode" button; Enter activates it.
 ydotool key 15:1 15:0 15:1 15:0 15:1 15:0 15:1 15:0
